@@ -7,7 +7,7 @@
 //
 
 #show: ieee.with(
-  title: "Multi-Channel Taskers",
+  title: "Evaluate Radar Resource Management Scheduling Algorithms with Comprehensive Simulation",
   abstract: [We develop a more comprehensive simulation of a suite of sensors to evaluate radar resource management scheduling algorithms.],
   authors: (
     (
@@ -52,12 +52,16 @@
 
 = Introduction
 
-Q-Ram _Q-Ram_
+Scheduling algorithms for radar resource management are critical for the effective operation of modern radar systems.
+Their performance is evaluated using simulations that do not consider the full system model, including the radar and the environment.
+We develop a more comprehensive simulation of a suite of sensors to evaluate radar resource management scheduling algorithms.
 
 
 = Background
 
 Text @akbar2023transfer and @akbar2024model .
+
+Brax @brax2021github
 
 == What does a boat look like?
 
@@ -79,22 +83,70 @@ Decisions made in this work are inspired by the _River-class destroyer_.
 
 We do not model underwater sensors, electronic warfare, aviation facilities, or armament systems.
 
-=== Aegis Combat System
+MDA Canada has been selected to develop an _X-Band_ Illumination AESA Radar to go below the SPY-7.
+#text(
+  fill: red,
+  [But then other renders omit it, point out a full compartment of active-seeker missiles, and mention that Constellation class omitts illuminators too.],
+)
 
-Includes an "Aegis Common Source Library" (CSL) and "Open Architecture".
-Appears to be closed source.
+It seems like the brains of the whole operation is
+Version 10 of the _Aegis Combat System_ (Aegis).
+There is also a
 
-It manages the detect-to-engage sequuence for anti-air warfare.
+This is an "Aegis Common Source Library" (CSL), with its "Open Architecture", is "Complemented by _Canadian Tactical Interface_ (CTI)"
+In this work "Common" means "Bespoke", "Open" means "Closed", and "Complemented by" means "Imcompatible with".
+
+*Aegis* owns:
+SPY-7 AESA Radar,
+Cooperative Engagement Capability,
+Radar Electronic Support Measure (ESM) SEWIP Block 2,
+IFF,
+Mk-41 VLS,
+ESSM Block 2,
+SM2,
+Tomahawk,
+Precision Navigation and Timing (PNT),
+Nulka Electronic Warefare Missile Decoy System,
+SeaCeptor Close-In Air Defense System (CIADS),
+Surface-to-surface naval strike missiles,
+and
+NATO Link 16/22.
+
+*CTI* owns:
+MDA Laser Warning and Countermaesures,
+SRD-506 Communication ESM system,
+Ultra s2150 Sonar,
+Ultras2170 Surface ship torpedo defence system,
+Ultra LFAPS-C Towed sonar,
+GD Sonobouy processing,
+Mk-54 Torpedos,
+an "Integrated Communications System" by L3 Harris,
+OSI Maritime integrated bridge system,
+primary 127mm gun with a NA-30S Mk-2 Fire Control System,
+and
+secondary 2x30mm Leonardo Lionfish gun system.
+
+
+
+Aegis manages the detect-to-engage sequuence for anti-air warfare.
 The AESA SPY-7 radar autonomously detects and tracks contacts.
 Other components classify and identify system tracks.
 
-=== SPY-7
-- 1.64 times the detection range of SPY-1
-- S-Band radar
-- Long range _discrimination_ radar.
-- Software wizardry to reduce the resolution difference between it and a dedicated X-band radar.
+SPY-7 S-Band radar (1.64 times the detection range of SPY-1)
 
 
+== SPY-1 Radar
+
+- 6MW radar
+- Search, Tracking, and Missile Guidance
+- Track up to 100 targets
+- 200km range
+- Missile Guidance is RF uplink using SPY-1 radar, then SPG-62 fire-control for splash. Requires scheduling of intercepts.
+- River Class uses the SPY-7. S-Band, Active ESA, 3.5MW, 500km range, 1000 targets, 1000km range for missile guidance.
+
+== Something else?
+
+SQL-32(V)6 which is an EW suite is confirmed, but not earlier list.
 
 === Radar Bands
 
@@ -106,6 +158,7 @@ Other components classify and identify system tracks.
 === Functions
 
 - Search
+  - Targes use @singer1970estimating.
 - Confirmation
 - Tracking
 - Cued search
@@ -130,6 +183,8 @@ By considering the full system model, we get a model of the impact of scheduling
 == Radar Model
 
 Surveillance Region is an annulur sector with a radar at the origin, an inner radius of 10 km, an azimuth $theta in [-45 degree, 45 degree]$ and range $r in [10 "km", 184 "km"]$.
+#text(fill: red, [Ravi/Sunila: Why 184? Also, it's going to be 3D, I think elevation gets $theta$?])
+
 
 
 
@@ -139,22 +194,15 @@ In earlier attempts to model radar scheduling problems @hebb2024belief, accelera
 We address this by using JAX @frostig2018jax to write both our environment model and our agent.
 This allow us to just-in-time compile (`jit`) the entire training loop using a single-program multiple-data pattern.
 Writing within the constraints of JAX gives us the benefit of easily running thousands of seeds in thousands of environments in parallel on a single GPU/TPU, or across multiple GPUs with parallel mapping.
+In particular, we use the Brax @brax2021github physics engine.
+While not designed to model sensors at all, being an excellent physics engine, the dynamics of the environment are well captured.
 
-// We take advantage of `equonox` @kidger2021equinox to develop the model.
+// To define custom models also in JAX, we take advantage of `equonox` @kidger2021equinox to develop the our models.
 
 == Compatability
 
-There is no way to build a complex simulator that produces structured data and get that data into a standard learning algorithm.
 PufferLib @suarez2024puffer takes the data and packs it into a flat buffer, this allows a complex simulator to be interacted with like an Atari game.
-
-GPU acceleration for simulation.
-Just write for CPU and use PufferLib's emulation layer to run in parallel.
-
-Custom simulation.
-Pure C with zero dynamic memory allocations.
-c_moba.pyx
-Train at over 1,000,000 steps per second.
-Centuries of simulated data in a few hours.
+Maybe I'll use this?
 
 
 = Simulation Results
