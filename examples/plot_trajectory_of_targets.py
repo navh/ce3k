@@ -1,5 +1,6 @@
 import jax
 import ce3k
+from timeit import default_timer as timer
 
 import matplotlib.pyplot as plt
 
@@ -26,24 +27,36 @@ obs, state = env.reset(key_reset, env_params)
 # action = 0
 action = 1
 
+jit_step = jax.jit(env.step)
+
 # Perform the step transition.
-n_obs, n_state, reward, done, _ = env.step(key_step, state, action, env_params)
+n_obs, n_state, reward, done, info = jit_step(key_step, state, action, env_params)
 
 state = n_state
-states = []
+target_states = []
 
-for i in range(100 * 10):
+STEPS = 100 * 100
+
+start = timer()
+xs = []
+ys = []
+zs = []
+
+for _ in range(STEPS):
     new_key, rng = jax.random.split(rng)
-    obs, state, reward, done, info = env.step(new_key, state, 0, env_params)
-    states.append(state.target_positions)
+    obs, state, reward, done, info = jit_step(new_key, state, 0, env_params)
+    target_states.append(state.target_positions)
+end = timer()
+print(f"walltime: {end - start}, Steps: {STEPS}")
+print(f"Steps per wallsecond: {STEPS / (end - start)}")
+print(f"Wallseconds per megastep: {(end - start) / (STEPS / 1_000_000)}")
+
 
 for i in range(len(state.target_positions)):
-    target = [state[i] for state in states]
+    target = [state[i] for state in target_states]
     x = [p[0] for p in target]
     y = [p[3] for p in target]
     z = [p[6] for p in target]
-
-    # ax.plot(x, y, z, label=f"Target {i + 1}")
     ax.scatter(x, y, z, label=f"Target {i + 1}", s=1)  # Adjust `s` for marker size
 
 

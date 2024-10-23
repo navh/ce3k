@@ -18,18 +18,21 @@ TEnvParams = TypeVar("TEnvParams", bound="EnvParams")
 # TMAX: float = 65.44
 # COSTMAX: float = 65.44
 
-# DTYPE_FLOAT = jnp.float16  # TODO f16 can't represent 200_000m, I've moved everything to km so flip this back on and see if it's any faster.
+# DTYPE_FLOAT = jnp.float16  # f16 can't represent 200_000m, I've moved everything to km so flip this back on and see if it's any faster.
 # DTYPE_INT = jnp.int16
 DTYPE_FLOAT = jnp.float32
 DTYPE_INT = jnp.int32
 
-#         # TODO: https://stonesoup.readthedocs.io/en/latest/stonesoup.models.transition.html#stonesoup.models.transition.linear.Singer
-#         # So the singer motion model has this crazy transition matrix.
-#         # I think I need to implement this myself, that said, I don't have a good intuition for its derivation.
-#         # There seem to be far more, far simpler, transition models out there.
-#         # It looks like singer is basically just gaussian noise on the acceleration anyway.
-#         for target in self.targets:
-#             target.update(t)
+MAX_TARGETS = 2**6
+AZ_SLICES = 15
+EL_SLICES = 5
+SENSORS = 1
+
+SENSOR_MIN_AZ = 0
+SENSOR_MAX_AZ = jnp.pi / 2  # 90 degrees
+SENSOR_MIN_EL = 0
+# 90/15 = 6 degrees per slice, 6*5 = 30 degrees total
+SENSOR_MAX_EL = jnp.pi / 6  # 30 degrees
 
 
 # Initially this was divided up into a "theatre" and "platform" spaces, for now I'm prepending "ship" to the platform bits
@@ -44,7 +47,6 @@ class EnvState:
     ship_idle_sensor: int  # which sensor is free?
     ship_sensor_cooldowns: jax.Array  # time until each sensor is free
     ship_searchers: jax.Array  # so this is the wedge countdown?
-    # ship_trackers: jax.Array  # so this will be max_targets times timers array? I might need to be writing down target keys too...
     tracker_t_desireds: jax.Array
     tracker_t_deadlines: jax.Array
     tracker_t_dwell_estimates: jax.Array
@@ -53,8 +55,6 @@ class EnvState:
 @struct.dataclass
 class EnvParams:
     max_steps_in_episode: int = 1
-    targets: int = 5
-    max_targets: int = 100
     new_target_rate_parameter: float = 0.05  # lambda in the poisson distribution
     target_max_v: float = 1000  # m/s
     target_max_a: float = 0  # m/s^2 # zero, should be N(0,Sigma)?
@@ -78,12 +78,8 @@ class EnvParams:
     # It may be more interesting to do a slightly smaller arena but with faster and more targets.
     # Simulating this gigantic void with mm resolution feels wasteful.
 
-    sensors: int = 1  # TODO: some way to specify sensor attributes.
-    search_options: int = 1  # idea: "two speed" search
     search_zero_cost_revisit_interval: float = 1.5
     search_dwell_duration: float = 0.01  # from Sunila's slides
-    az_slices: int = 15
-    el_slices: int = 5
     search_penalty_per_second_late: int = 1
     track_penalty_per_second_late: int = 1
 
@@ -95,11 +91,68 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
     def default_params(self) -> EnvParams:
         return EnvParams()
 
-    def execute_search(self, state: EnvState, action, params: EnvParams) -> EnvState:
+    def execute_search(
+        self, state: EnvState, action: int, params: EnvParams
+    ) -> EnvState:
         # Find the least recently used beam and execute it
         # check the search pattern
         # transform any of the targets found during the search into 'trackers'
 
+        # For each target, calculate the SNR based on the action
+        # SNR is defined as zero if the target is not in the beam selected by the action
+        #
+        # azimuth_bottom = (action % AZ_SLICES) * (
+        #     SENSOR_MAX_AZ - SENSOR_MIN_AZ
+        # ) / AZ_SLICES - SENSOR_MIN_AZ
+        # azimuth_top = (action % AZ_SLICES + 1) * (
+        #     SENSOR_MAX_AZ - SENSOR_MIN_AZ
+        # ) / AZ_SLICES - SENSOR_MIN_AZ
+        #
+        # elevation_bottom = (action // AZ_SLICES) * (
+        #     SENSOR_MAX_EL - SENSOR_MIN_EL
+        # ) / EL_SLICES - SENSOR_MIN_EL
+        # elevation_top = (action // AZ_SLICES + 1) * (
+        #     SENSOR_MAX_EL - SENSOR_MIN_EL
+        # ) / EL_SLICES - SENSOR_MIN_EL
+        #
+        # target_sphere_from_origin = jnp.array(
+        #     [
+        #         jnp.sqrt(
+        #             jnp.array(
+        #                 [
+        #                     state.target_positions[0] ** 2,
+        #                     state.target_positions[3] ** 2,
+        #                     state.target_positions[6] ** 2,
+        #                 ]
+        #             )
+        #         ),  # range r
+        #         jnp.arccos(
+        #             state.target_positions[6]
+        #             / jnp.linalg.norm(
+        #                 jnp.array(
+        #                     [
+        #                         state.target_positions[0],
+        #                         state.target_positions[3],
+        #                         state.target_positions[6],
+        #                     ]
+        #                 )
+        #             ),
+        #         ),  # elevation theta
+        #         jnp.arctan2(
+        #             state.target_positions[3], state.target_positions[0]
+        #         ),  # azimuth phi
+        #     ]
+        # )
+        #
+        # target_in_beam = (
+        #     (targets_sphere_from_origin[1] >= elevation_bottom)
+        #     & (targets_sphere_from_origin[1] < elevation_top)
+        #     & (targets_sphere_from_origin[2] >= azimuth_bottom)
+        #     & (targets_sphere_from_origin[2] < azimuth_top)
+        # )
+        #
+        # jax.debug.print(target_in_beam)
+        #
         return EnvState(
             state.target_positions,
             state.target_singer_sigmas,
@@ -117,11 +170,13 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
             state.tracker_t_dwell_estimates,
         )
 
-    def execute_track(self, state: EnvState, action, params: EnvParams) -> EnvState:
+    def execute_track(
+        self, state: EnvState, action: int, params: EnvParams
+    ) -> EnvState:
         # Execute the tracker indicitaed by the action number.
         #
         # TODO: Somewhere here we need a mechanism to stop a tracker.
-        track_index = action - params.search_options
+        track_index = action - SENSORS
 
         # Calculate actual dwell time
         t_c_super_n = 0.01  # 10ms from the slides
@@ -185,7 +240,7 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
             jnp.array(
                 [
                     0,
-                    state.tracker_t_desireds[action - params.search_options]
+                    state.tracker_t_desireds[action - SENSORS]
                     * params.track_penalty_per_second_late,
                 ]
             )
@@ -194,7 +249,7 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         return reward
 
     def spawn_targets(self, key, params):
-        # Okay, for now everything is a type 1 target. To do the 'varying number of targets'
+        # Okay, for now everything is some hypbtarget. To do the 'varying number of targets'
         # I think I need a big params.max_targets buffer and a "add_target(rng, target_index, targbuf, params)"
         # type function that goes and injects a new target into the buffer.
         # Or maybe I need to just generate a whole array of type 1s, 2s, and 3s and then just copy them into
@@ -206,7 +261,7 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
 
         target_positions = jax.random.uniform(
             key_position,
-            (params.targets, 9),
+            (MAX_TARGETS, 9),
             minval=jnp.array(
                 [
                     params.arena_min_dx,
@@ -257,10 +312,10 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         # Less obvious TODO: specify the number of each type in the params.
         # Least obvious TODO: specify a scenario where truly different kinematics can coexist.
         target_singer_sigmas = jax.random.uniform(
-            key_sigmas, (params.targets, 1), dtype=DTYPE_FLOAT, minval=0, maxval=35
+            key_sigmas, (MAX_TARGETS, 1), dtype=DTYPE_FLOAT, minval=0, maxval=35
         )
         target_singer_thetas = jax.random.uniform(
-            key_thetas, (params.targets, 1), dtype=DTYPE_FLOAT, minval=1, maxval=50
+            key_thetas, (MAX_TARGETS, 1), dtype=DTYPE_FLOAT, minval=1, maxval=50
         )
 
         return target_positions, target_singer_sigmas, target_singer_thetas
@@ -274,11 +329,29 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
 
         # targets have x,y,z,vx,vy,vz,ax,ay,az in m, m/s, m/s^2
 
+        # target_positions = jnp.zeros((MAX_TARGETS, 9), dtype=DTYPE_FLOAT)
+        # target_singer_sigmas = jnp.zeros((MAX_TARGETS, 1), dtype=DTYPE_FLOAT)
+        # target_singer_thetas = jnp.zeros((MAX_TARGETS, 1), dtype=DTYPE_FLOAT)
+
         key_spawn_targets, key = jax.random.split(key)
 
         target_positions, target_singer_sigmas, target_singer_thetas = (
             self.spawn_targets(key_spawn_targets, params)
         )
+
+        # Average time to leave the arena is 184_000m / 500m/s = 368s, so 0.05*368 = 18.4 targets
+        # Mask off all but the first 20 targets
+        first_n_targets = 20
+        target_positions = target_positions.at[20:].set(
+            jnp.zeros((MAX_TARGETS - first_n_targets, 9), dtype=DTYPE_FLOAT)
+        )
+        target_singer_sigmas = target_singer_sigmas.at[20:].set(
+            jnp.zeros((MAX_TARGETS - first_n_targets, 1), dtype=DTYPE_FLOAT)
+        )
+        target_singer_thetas = target_singer_thetas.at[20:].set(
+            jnp.zeros((MAX_TARGETS - first_n_targets, 1), dtype=DTYPE_FLOAT)
+        )
+
         # PLATFORM PLATFORM PLATFORM PLATFORM PLATFORM PLATFORM PLATFORM PLATFORM
 
         # First build a ship
@@ -286,16 +359,19 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
 
         # Add sensors to the ship
 
-        ship_sensor_cooldowns = jnp.zeros(shape=(params.sensors,), dtype=DTYPE_FLOAT)
+        # This is a hack,
+        # it causes the first step to timewarp 42 seconds into the future
+        # This way hopefully some targets will spawn
+        ship_sensor_cooldowns = (
+            jnp.zeros(shape=(SENSORS,), dtype=DTYPE_FLOAT).at[0].set(42.0)
+        )
 
         # searcher has t_desired for each wedge in seconds
         # ship_searchers = jnp.ones(
-        ship_searchers = jnp.zeros(
-            params.az_slices * params.el_slices, dtype=DTYPE_FLOAT
-        )
+        ship_searchers = jnp.zeros(AZ_SLICES * EL_SLICES, dtype=DTYPE_FLOAT)
 
         # trackers have t_desired, t_deadline, t_dwell_estimate, in seconds
-        ship_trackers = jnp.zeros((params.max_targets, 3), dtype=DTYPE_FLOAT)
+        ship_trackers = jnp.zeros((MAX_TARGETS, 3), dtype=DTYPE_FLOAT)
 
         # targets: jax.Array  # Yikes, not easy at all to implement different targets with different kinematics.
         # ship_state: jax.Array  # should we get this puppy moving? for now, origin
@@ -303,9 +379,10 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         # ship_searchers: jax.Array  # so this is the wedge countdown?
         # ship_trackers: jax.Array  # so this will be max_targets times timers array? I might need to be writing down target keys too...
         #
-        tracker_t_desireds = jnp.zeros(params.max_targets, dtype=DTYPE_FLOAT)
-        tracker_t_deadlines = jnp.zeros(params.max_targets, dtype=DTYPE_FLOAT)
-        tracker_t_dwell_estimates = jnp.zeros(params.max_targets, dtype=DTYPE_FLOAT)
+        tracker_t_desireds = jnp.zeros(MAX_TARGETS, dtype=DTYPE_FLOAT)
+        tracker_t_deadlines = jnp.zeros(MAX_TARGETS, dtype=DTYPE_FLOAT)
+        tracker_t_dwell_estimates = jnp.zeros(MAX_TARGETS, dtype=DTYPE_FLOAT)
+        # TODO: divide by n_targets
 
         state = EnvState(
             target_positions=target_positions,
@@ -387,8 +464,9 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         new_targets = inactive_targets & (
             jax.random.poisson(
                 key_poisson,
-                lam=params.new_target_rate_parameter * delta_t,
-                shape=(params.targets,),
+                lam=params.new_target_rate_parameter * delta_t / MAX_TARGETS,
+                shape=(MAX_TARGETS,),
+                dtype=DTYPE_INT,
             )
             > 0
         )
@@ -492,7 +570,7 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
 
     def action_space(self, params: EnvParams):
         """Action space of the environment."""
-        return spaces.Discrete(params.search_options + params.max_targets)
+        return spaces.Discrete(SENSORS + MAX_TARGETS)
 
     # TODO: @amos update this to reflect the actual observation space
     def observation_space(self, params: EnvParams):
@@ -500,7 +578,7 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
 
         return spaces.Dict(
             {
-                "sensor": spaces.Discrete(params.sensors),
+                "sensor": spaces.Discrete(SENSORS),
                 "search": spaces.Dict(
                     {
                         "t_start": spaces.Box(
@@ -509,24 +587,24 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
                         "t_elapsed": spaces.Box(
                             0,
                             jnp.finfo(DTYPE_FLOAT).max,
-                            (params.az_slices * params.el_slices,),
+                            (AZ_SLICES * EL_SLICES,),
                             DTYPE_FLOAT,
                         ),
                     }
                 ),
                 "trackers": spaces.Dict(
                     {
-                        "on": spaces.Box(0, 1, (params.max_targets,), DTYPE_INT),
+                        "on": spaces.Box(0, 1, (MAX_TARGETS,), DTYPE_INT),
                         "t_start": spaces.Box(
                             0,
                             jnp.finfo(DTYPE_FLOAT).max,
-                            (params.max_targets,),
+                            (MAX_TARGETS,),
                             DTYPE_FLOAT,
                         ),
                         "t_dwell": spaces.Box(
                             0,
                             jnp.finfo(DTYPE_FLOAT).max,
-                            (params.max_targets,),
+                            (MAX_TARGETS,),
                             DTYPE_FLOAT,
                         ),
                         # "delay_cost", "drop_cost","deadline_time",
@@ -573,16 +651,3 @@ def target_update(
     )
 
     return (target_positions @ newton_matrix) * rho + acceleration_noise
-
-
-# def report_spherical_coordinates(state: jax.Array) -> jax.Array:
-# """Convert cartesian coords to angular wrt the origin"""
-# return jnp.array(
-# [
-# jnp.linalg.norm(jnp.array([state[0], state[3], state[6]])),  # range r
-# jnp.arccos(
-# state[6] / jnp.linalg.norm(jnp.array([state[0], state[3], state[6]])),
-# ),  # elevation theta
-# jnp.arctan2(state[3], state[0]),  # azimuth phi
-# ]
-# )

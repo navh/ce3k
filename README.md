@@ -5,12 +5,7 @@ The CE3K simulator is intended to help with evaluating scheduling techniques in 
 This is a _continuing environment_ designed for evaluating the performance of scheduling algorithms.
 This means it should be able to run without resets.
 
-## Questions for Sunila
-
-- In slides, it looks like search cares about range, is this the case? 
-
 ## Questions for Jack
-
 
 ## Assumptions
 
@@ -18,6 +13,7 @@ This means it should be able to run without resets.
 
 ## Backlog
 
+- [ ] develop some way to specify dissimilar sensors (eg, X band & S band, different directions)
 - [ ] drop penalty for functions not serviced fast enough
 - [ ] implement 2 sensors (sensors enter busy state)
 - [ ] create reference batch of scheduling algorithms
@@ -52,3 +48,12 @@ This represents, for example, a ship.
 So I started building this hoping to keep everything in 16 bits of precision.
 Considering the very tiny time scales we're incrementing over, this seems more than adequate, and yet, mostly just due to the gigantic search area.
 I'd like to come up with some clever way to handle the need to have precise position updates that can be sub-millisecond, and yet in theory cover the entire 200km+ search range. Maybe I need to break the universe up into chunks? That said, it's easier to just use 32bits of precision than it is to try to dream up some custom encoding.
+
+## maybe
+
+- feat: representing sparse information - allows for inference, exploit sparse, LASSO, L1 Norm?
+  - The different kinds of sparse format (CSC, COO, …);
+  - Sparse linear solvers (e.g. iterative/Krylov methods);
+  - Linear preconditioners.
+- order invariant layer (Zaheer et al. 2017)
+- targets that react to being observed
