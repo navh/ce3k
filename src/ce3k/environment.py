@@ -151,8 +151,6 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         #     & (targets_sphere_from_origin[2] < azimuth_top)
         # )
         #
-        # jax.debug.print(target_in_beam)
-        #
         return EnvState(
             state.target_positions,
             state.target_singer_sigmas,
