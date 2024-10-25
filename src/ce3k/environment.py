@@ -101,56 +101,17 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         # For each target, calculate the SNR based on the action
         # SNR is defined as zero if the target is not in the beam selected by the action
         #
-        # azimuth_bottom = (action % AZ_SLICES) * (
-        #     SENSOR_MAX_AZ - SENSOR_MIN_AZ
-        # ) / AZ_SLICES - SENSOR_MIN_AZ
-        # azimuth_top = (action % AZ_SLICES + 1) * (
-        #     SENSOR_MAX_AZ - SENSOR_MIN_AZ
-        # ) / AZ_SLICES - SENSOR_MIN_AZ
-        #
-        # elevation_bottom = (action // AZ_SLICES) * (
-        #     SENSOR_MAX_EL - SENSOR_MIN_EL
-        # ) / EL_SLICES - SENSOR_MIN_EL
-        # elevation_top = (action // AZ_SLICES + 1) * (
-        #     SENSOR_MAX_EL - SENSOR_MIN_EL
-        # ) / EL_SLICES - SENSOR_MIN_EL
-        #
-        # target_sphere_from_origin = jnp.array(
-        #     [
-        #         jnp.sqrt(
-        #             jnp.array(
-        #                 [
-        #                     state.target_positions[0] ** 2,
-        #                     state.target_positions[3] ** 2,
-        #                     state.target_positions[6] ** 2,
-        #                 ]
-        #             )
-        #         ),  # range r
-        #         jnp.arccos(
-        #             state.target_positions[6]
-        #             / jnp.linalg.norm(
-        #                 jnp.array(
-        #                     [
-        #                         state.target_positions[0],
-        #                         state.target_positions[3],
-        #                         state.target_positions[6],
-        #                     ]
-        #                 )
-        #             ),
-        #         ),  # elevation theta
-        #         jnp.arctan2(
-        #             state.target_positions[3], state.target_positions[0]
-        #         ),  # azimuth phi
-        #     ]
-        # )
-        #
-        # target_in_beam = (
-        #     (targets_sphere_from_origin[1] >= elevation_bottom)
-        #     & (targets_sphere_from_origin[1] < elevation_top)
-        #     & (targets_sphere_from_origin[2] >= azimuth_bottom)
-        #     & (targets_sphere_from_origin[2] < azimuth_top)
-        # )
-        #
+        azimuth_bottom = (action % AZ_SLICES) * (
+            SENSOR_MAX_AZ - SENSOR_MIN_AZ
+        ) / AZ_SLICES - SENSOR_MIN_AZ
+        azimuth_top = (action % AZ_SLICES + 1) * (
+            SENSOR_MAX_AZ - SENSOR_MIN_AZ
+        ) / AZ_SLICES - SENSOR_MIN_AZ
+
+        elevation_bottom = (action // AZ_SLICES) * (
+            SENSOR_MAX_EL - SENSOR_MIN_EL
+        ) / EL_SLICES - SENSOR_MIN_EL
+
         return EnvState(
             state.target_positions,
             state.target_singer_sigmas,
@@ -177,8 +138,11 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         track_index = action - SENSORS
 
         # Calculate actual dwell time
-        t_c_super_n = 0.01  # 10ms from the slides
-        r_0 = 184_000  # 184km from the slides
+        reference_dwell_time = 0.01  # 10ms from the slides
+        reference_range = 184_000  # 184km from the slides
+        # reference_cross_section = jnp.exp(1)
+        reference_cross_section = 40  # Hack to make these cancel out
+        target_cross_section = 1  # 1m^2 from
         r = jnp.sqrt(
             state.target_positions[track_index][0] ** 2
             + state.target_positions[track_index][3] ** 2
@@ -188,7 +152,13 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         # I guess this should be coming from a kalman filter or something.
         SN_0 = 40  # 16dB from the slides?
         SNR = 40  # TODO: This is wrong, @Sunila
-        new_t_dwell_estimate = t_c_super_n * (r / r_0) ** 4  # Ignore SN_0?
+        new_t_dwell_estimate = (
+            reference_dwell_time
+            * (r / reference_range) ** 4
+            * target_cross_section
+            / reference_cross_section
+            * SN_0
+        )
         # @Sunila - something to check
 
         # Calculate new time desired
@@ -196,16 +166,19 @@ class Environment(Generic[TEnvState, TEnvParams]):  # object):
         sigma_theta = 1  # There's a sigma theta here, I'm worried it's some 2d stuff.
         u = 0.3  # Magic number from the slides.
         new_t_desired = (
-            0.4
-            * (
-                r
-                * sigma_theta
-                * jnp.sqrt(state.target_singer_thetas[track_index][0])
-                / state.target_singer_sigmas[track_index][0]
-            )  # TODO: this '[0]' doesn't feel necessary, but it seems to make things work?
-            ** 0.4
-            * u**2.4
-            / (1 + 0.5 * u**2)
+            (
+                0.4
+                * (
+                    r
+                    * sigma_theta
+                    * jnp.sqrt(state.target_singer_thetas[track_index][0])
+                    / state.target_singer_sigmas[track_index][0]
+                )  # TODO: this '[0]' doesn't feel necessary, but it seems to make things work?
+                ** 0.4
+                * u**2.4
+                / (1 + 0.5 * u**2)
+            )
+            / 100  # NOTE: Hack, I've put this in to try to generate schedules with contention, all of this math must be revisited.
         )
 
         new_t_deadline = new_t_desired * 2  # Arbitrary, from the slides.
